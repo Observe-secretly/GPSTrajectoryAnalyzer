@@ -361,23 +361,7 @@ export class GPSProcessor {
     return true; // 有效点
   }
 
-  /**
-   * 计算质心点
-   */
-  private calculateCentroid(points: GPSPoint[]): GPSPoint {
-    if (points.length === 0) {
-      throw new Error('Points array is empty');
-    }
 
-    const sumLat = points.reduce((sum, point) => sum + point.lat, 0);
-    const sumLng = points.reduce((sum, point) => sum + point.lng, 0);
-
-    return {
-      lat: sumLat / points.length,
-      lng: sumLng / points.length,
-      timestamp: points[Math.floor(points.length / 2)].timestamp // 使用中间点的时间戳
-    };
-  }
 
 
 
@@ -413,31 +397,7 @@ export class GPSProcessor {
     };
   }
 
-  /**
-   * 解析GPS坐标字符串
-   */
-  public static parseGPSString(gpsString: string): GPSPoint[] {
-    const points: GPSPoint[] = [];
-    const lines = gpsString.trim().split('\n');
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      // 支持多种格式："lat,lng" 或 "lat lng" 或 "lat, lng"
-      const coords = line.split(/[,\s]+/).map(s => parseFloat(s.trim()));
-
-      if (coords.length >= 2 && !isNaN(coords[0]) && !isNaN(coords[1])) {
-        points.push({
-          lat: coords[0],
-          lng: coords[1],
-          timestamp: Date.now() + i * 1000 // 模拟每秒一个点
-        });
-      }
-    }
-
-    return points;
-  }
 
   /**
    * 转换新格式的GPS数据为内部格式
@@ -806,124 +766,7 @@ export class GPSProcessor {
     };
   }
 
-  /**
-   * 数据格式转换工具
-   */
-  public static convertDataFormat = {
-    /**
-     * 从JSON字符串解析GPS数据
-     */
-    fromJSONString: (jsonString: string): GPSPoint[] => {
-      const algorithmPackage = this.createAlgorithmPackage();
-      const points = algorithmPackage.parseFromString(jsonString);
-      return points.map(p => ({ lat: p.lat, lng: p.lng, timestamp: p.timestamp }));
-    },
 
-    /**
-     * 从CSV字符串解析GPS数据
-     */
-    fromCSVString: (csvString: string, hasHeader: boolean = true): GPSPoint[] => {
-      const converter = new GPSDataConverter();
-      const points = converter.parseFromCSV(csvString, hasHeader);
-      return points.map(p => ({ lat: p.lat, lng: p.lng, timestamp: p.timestamp }));
-    },
 
-    /**
-     * 导出为JSON字符串
-     */
-    toJSONString: (points: GPSPoint[]): string => {
-      const algorithmPackage = this.createAlgorithmPackage();
-      const algorithmPoints: AlgorithmGPSPoint[] = points.map(p => ({
-        lat: p.lat,
-        lng: p.lng,
-        timestamp: p.timestamp
-      }));
-      return algorithmPackage.exportToJSON(algorithmPoints);
-    },
 
-    /**
-     * 导出为CSV字符串
-     */
-    toCSVString: (points: GPSPoint[], includeHeader: boolean = true): string => {
-      const converter = new GPSDataConverter();
-      const algorithmPoints: AlgorithmGPSPoint[] = points.map(p => ({
-        lat: p.lat,
-        lng: p.lng,
-        timestamp: p.timestamp
-      }));
-      return converter.exportToCSV(algorithmPoints, includeHeader);
-    },
-
-    /**
-     * 验证GPS数据格式
-     */
-    validate: (points: any[]): { valid: GPSPoint[]; invalid: any[] } => {
-      const valid: GPSPoint[] = [];
-      const invalid: any[] = [];
-      
-      for (const point of points) {
-        if (GPSAlgorithmPackage.validateGPSPoint(point)) {
-          valid.push(point);
-        } else {
-          invalid.push(point);
-        }
-      }
-      
-      return { valid, invalid };
-    }
-  };
-
-  /**
-   * 迁移指南：从旧接口迁移到新接口
-   * 
-   * 旧方式：
-   * const processor = new GPSProcessor();
-   * const result = processor.processTrajectory(points);
-   * 
-   * 新方式（推荐）：
-   * const result = GPSProcessor.processWithAlgorithmPackage(points);
-   * 
-   * 或者直接使用算法包：
-   * const algorithmPackage = GPSProcessor.createAlgorithmPackage();
-   * const result = algorithmPackage.processTrajectory(points);
-   */
-  public static getMigrationGuide(): string {
-    return `
-=== GPS处理器迁移指南 ===
-
-1. 基础处理迁移：
-   旧方式：
-   const processor = new GPSProcessor();
-   const result = processor.processTrajectory(points);
-   
-   新方式：
-   const result = GPSProcessor.processWithAlgorithmPackage(points);
-
-2. 配置参数迁移：
-   旧方式：
-   const processor = new GPSProcessor({ windowSize: 15 });
-   
-   新方式：
-   const result = GPSProcessor.processWithAlgorithmPackage(points, { windowSize: 15 });
-
-3. 模拟数据生成迁移：
-   旧方式：
-   const simulated = GPSProcessor.generateSimulatedData(convertedData);
-   
-   新方式：
-   const simulated = GPSProcessor.generateAdvancedSimulatedData(points);
-
-4. 直接使用新算法包（推荐）：
-   const algorithmPackage = GPSProcessor.createAlgorithmPackage();
-   const result = algorithmPackage.processTrajectory(points);
-
-新接口的优势：
-- 更详细的统计信息
-- 标准化的数据格式
-- 更好的错误处理
-- 支持多种数据格式
-- 插拔式算法架构
-- 更强大的模拟功能
-    `;
-  }
 }

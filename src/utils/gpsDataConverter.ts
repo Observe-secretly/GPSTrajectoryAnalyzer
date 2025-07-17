@@ -140,6 +140,13 @@ export class GPSDataConverter implements IDataConverter {
       cog: null
     }));
   }
+
+  /**
+   * 导出为JSON字符串
+   */
+  exportToJSON(points: GPSPoint[]): string {
+    return JSON.stringify(points, null, 2);
+  }
   
   /**
    * 从JSON数据加载GPS点
@@ -269,174 +276,9 @@ export class GPSDataConverter implements IDataConverter {
     return { lat, lng, timestamp };
   }
   
-  /**
-   * 导出为JSON字符串
-   */
-  exportToJSON(points: GPSPoint[]): string {
-    return JSON.stringify(points, null, 2);
-  }
+
   
-  /**
-   * 导出为扩展JSON格式
-   */
-  exportToExtendedJSON(points: ExtendedGPSPoint[]): string {
-    return JSON.stringify(points, null, 2);
-  }
-  
-  /**
-   * 导出为CSV格式
-   */
-  exportToCSV(points: GPSPoint[], includeHeader: boolean = true): string {
-    const lines: string[] = [];
-    
-    if (includeHeader) {
-      lines.push('latitude,longitude,timestamp');
-    }
-    
-    for (const point of points) {
-      lines.push(`${point.lat},${point.lng},${point.timestamp}`);
-    }
-    
-    return lines.join('\n');
-  }
-  
-  /**
-   * 导出为扩展CSV格式
-   */
-  exportToExtendedCSV(points: ExtendedGPSPoint[], includeHeader: boolean = true): string {
-    const lines: string[] = [];
-    
-    if (includeHeader) {
-      lines.push('latitude,longitude,timestamp,speed,altitude,course');
-    }
-    
-    for (const point of points) {
-      const spd = point.spd !== null && point.spd !== undefined ? point.spd : '';
-      const alt = point.alt !== null && point.alt !== undefined ? point.alt : '';
-      const cog = point.cog !== null && point.cog !== undefined ? point.cog : '';
-      lines.push(`${point.lat},${point.lng},${point.timestamp},${spd},${alt},${cog}`);
-    }
-    
-    return lines.join('\n');
-  }
-  
-  /**
-   * 从CSV字符串解析GPS点
-   */
-  parseFromCSV(csvString: string, hasHeader: boolean = true): GPSPoint[] {
-    const lines = csvString.trim().split('\n');
-    const points: GPSPoint[] = [];
-    
-    const startIndex = hasHeader ? 1 : 0;
-    
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-      
-      try {
-        const point = this.parseCSVLine(line, i);
-        if (point) {
-          points.push(point);
-        }
-      } catch (error) {
-        console.warn(`解析CSV第${i + 1}行失败: ${line}`, error);
-      }
-    }
-    
-    return points;
-  }
-  
-  /**
-   * 解析CSV行
-   */
-  private parseCSVLine(line: string, lineIndex: number): GPSPoint | null {
-    const parts = line.split(',').map(s => s.trim());
-    
-    if (parts.length < 2) {
-      return null;
-    }
-    
-    const lat = parseFloat(parts[0]);
-    const lng = parseFloat(parts[1]);
-    
-    if (isNaN(lat) || isNaN(lng)) {
-      return null;
-    }
-    
-    // 验证坐标范围
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      console.warn(`CSV第${lineIndex + 1}行坐标超出有效范围: lat=${lat}, lng=${lng}`);
-      return null;
-    }
-    
-    let timestamp: number;
-    if (parts.length >= 3 && parts[2]) {
-      timestamp = this.parseTimestamp(parts[2]);
-      if (isNaN(timestamp)) {
-        timestamp = Date.now() + lineIndex * 1000;
-      }
-    } else {
-      timestamp = Date.now() + lineIndex * 1000;
-    }
-    
-    return { lat, lng, timestamp };
-  }
-  
-  /**
-   * 验证GPS点数据
-   */
-  validateGPSPoints(points: any[]): { valid: GPSPoint[]; invalid: any[] } {
-    const valid: GPSPoint[] = [];
-    const invalid: any[] = [];
-    
-    for (const point of points) {
-      if (GPSAlgorithmPackage.validateGPSPoint(point)) {
-        valid.push(point);
-      } else {
-        invalid.push(point);
-      }
-    }
-    
-    return { valid, invalid };
-  }
-  
-  /**
-   * 数据格式转换统计
-   */
-  getConversionStats(originalData: any, convertedPoints: GPSPoint[]): {
-    originalCount: number;
-    convertedCount: number;
-    successRate: number;
-    dataType: string;
-  } {
-    let originalCount = 0;
-    let dataType = 'unknown';
-    
-    if (Array.isArray(originalData)) {
-      originalCount = originalData.length;
-      dataType = 'array';
-    } else if (typeof originalData === 'string') {
-      originalCount = originalData.split('\n').filter(line => line.trim()).length;
-      dataType = 'string';
-    } else if (typeof originalData === 'object' && originalData !== null) {
-      dataType = 'object';
-      // 尝试估算原始数据点数
-      const possibleArrays = Object.values(originalData).filter(Array.isArray);
-      if (possibleArrays.length > 0) {
-        originalCount = Math.max(...possibleArrays.map(arr => (arr as any[]).length));
-      }
-    }
-    
-    const convertedCount = convertedPoints.length;
-    const successRate = originalCount > 0 ? convertedCount / originalCount : 0;
-    
-    return {
-      originalCount,
-      convertedCount,
-      successRate,
-      dataType
-    };
-  }
+
 }
 
 export default GPSDataConverter;

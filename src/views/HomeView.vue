@@ -58,6 +58,21 @@ const showInputMode = ref(true) // true: 输入模式, false: 参数调整模式
 const enableCoordinateConversion = ref(true)
 const showBaselineTrajectory = ref(true)
 
+// 加载状态
+const isLoading = ref(false)
+const loadingMessage = ref('')
+
+// 防抖函数
+const debounce = (fn: Function, delay: number) => {
+  let timer: number | null = null
+  return (...args: any[]) => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      fn.apply(null, args)
+    }, delay) as unknown as number
+  }
+}
+
 // 算法包相关
 const useNewAlgorithm = ref(false) // 是否使用新算法包
 const algorithmResult = ref<AlgorithmResult | null>(null) // 新算法包处理结果
@@ -162,8 +177,11 @@ const refreshStatus = () => {
   processorStatus.value = gpsProcessor.getStatus()
 }
 
-// 处理GPS数据
-const processGPS = () => {
+// 处理GPS数据（添加防抖）
+const processGPS = debounce(async () => {
+  if (isLoading.value) return
+  isLoading.value = true
+  loadingMessage.value = '正在处理GPS数据...'
   if (!gpsInput.value.trim()) return
 
   try {
@@ -188,7 +206,11 @@ const processGPS = () => {
     const status = gpsProcessor.getStatus()
     basePointRebuildMarkers.value = status.basePointRebuildPositions.map((point, index) => ({
       type: 'rebuild' as const,
-      position: { lat: point.lat, lng: point.lng },
+      position: {
+        lat: point.lat,
+        lng: point.lng,
+        timestamp: Date.now() + index * 1000 // 添加时间戳
+      },
       info: `基准点重建 #${index + 1}`
     })) || []
 
@@ -197,14 +219,19 @@ const processGPS = () => {
       处理后点数: processedResult.value.processedPoints.length,
       过滤点数: processedResult.value.originalPoints.length - processedResult.value.processedPoints.length
     })
+    isLoading.value = false
+    loadingMessage.value = ''
     
     // 切换到参数调整模式
     showInputMode.value = false
   } catch (error) {
     console.error('GPS数据处理失败:', error)
     alert('GPS数据处理失败，请检查输入格式')
+  } finally {
+    isLoading.value = false
+    loadingMessage.value = ''
   }
-}
+}, 500)
 
 // 切换面板显示
 const togglePanel = () => {
@@ -217,8 +244,11 @@ const finishAdjustment = () => {
   isPanelExpanded.value = true
 }
 
-// 生成模拟数据
-const generateSimulatedData = async () => {
+// 生成模拟数据（添加防抖）
+const generateSimulatedData = debounce(async () => {
+  if (isLoading.value) return
+  isLoading.value = true
+  loadingMessage.value = '正在生成模拟数据...'
   try {
     // 动态导入JSON数据
     const response = await fetch('/convertedTrajectory.json')
@@ -286,15 +316,22 @@ const generateSimulatedData = async () => {
       增加点数: simulatedResult.points.length - trajectoryData.length,
       标记数量: simulationMarkers.value.length
     })
+    isLoading.value = false
+    loadingMessage.value = ''
 
   } catch (error) {
     console.error('生成模拟数据失败:', error)
     alert('生成模拟数据失败，请检查轨迹数据格式')
+  } finally {
+    isLoading.value = false
+    loadingMessage.value = ''
   }
-}
+}, 500)
 
 // 加载基准轨迹数据
 const loadBaselineTrajectory = async () => {
+  isLoading.value = true
+  loadingMessage.value = '正在加载基准轨迹...'
   try {
     const response = await fetch('/convertedTrajectory.json')
     const data = await response.json()
@@ -304,8 +341,13 @@ const loadBaselineTrajectory = async () => {
       timestamp: Date.now() + index * 1000 // 模拟时间戳
     })) as GPSPoint[]
     console.log('基准轨迹加载完成，共', baselineTrajectory.value.length, '个点')
+    isLoading.value = false
+    loadingMessage.value = ''
   } catch (error) {
     console.error('加载基准轨迹失败:', error)
+  } finally {
+    isLoading.value = false
+    loadingMessage.value = ''
   }
 }
 
@@ -372,8 +414,12 @@ onMounted(() => {
                 rows="5"
               ></textarea>
               <div class="button-group">
-                <button @click="processGPS" class="process-btn" :disabled="!gpsInput.trim()">处理GPS数据</button>
-                <button @click="generateSimulatedData" class="simulate-btn">生成模拟数据</button>
+                <button @click="processGPS" class="process-btn" :disabled="!gpsInput.trim() || isLoading">
+                  {{ isLoading ? loadingMessage : '处理GPS数据' }}
+                </button>
+                <button @click="generateSimulatedData" class="simulate-btn" :disabled="isLoading">
+                  {{ isLoading ? loadingMessage : '生成模拟数据' }}
+                </button>
                 <button @click="clearData" class="clear-btn">清空数据</button>
 
               </div>
@@ -591,6 +637,35 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 加载状态样式 */
+.simulate-btn,
+.process-btn {
+  position: relative;
+  min-width: 120px;
+}
+
+.simulate-btn:disabled,
+.process-btn:disabled {
+  background-color: #e0e0e0;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.simulate-btn:disabled:hover,
+.process-btn:disabled:hover {
+  background-color: #e0e0e0;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.simulate-btn:disabled,
+.process-btn:disabled {
+  animation: pulse 1.5s infinite;
+}
 .home-container {
   position: relative;
   height: 100vh;
