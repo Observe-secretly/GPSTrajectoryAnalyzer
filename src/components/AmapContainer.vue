@@ -294,6 +294,7 @@ export default defineComponent({
 
       // 添加模拟标记
       if (props.simulationMarkers && props.simulationMarkers.length > 0) {
+        console.log('添加标记点:', props.simulationMarkers);
         const simulationMarkers = props.simulationMarkers.map((marker: { type: 'tunnel' | 'drift' | 'speed', position: { lat: number, lng: number }, info: string }) => {
           const convertedMarkers = convertCoordinates([{
             lat: marker.position.lat,
@@ -302,19 +303,36 @@ export default defineComponent({
           }]);
 
           const convertedPos = convertedMarkers[0];
+          console.log(`处理标记点 - 类型: ${marker.type}, 位置: [${convertedPos.lat}, ${convertedPos.lng}], 信息: ${marker.info}`);
 
-          return new (window as any).AMap.Marker({
+          const markerIcon = {
+            tunnel: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#8B4513" stroke="#654321" stroke-width="2"/><text x="10" y="14" text-anchor="middle" fill="white" font-size="10" font-weight="bold">T</text></svg>`,
+            drift: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#FF6B35" stroke="#E55A2B" stroke-width="2"/><text x="10" y="14" text-anchor="middle" fill="white" font-size="10" font-weight="bold">D</text></svg>`,
+            speed: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#2196F3" stroke="#1976D2" stroke-width="2"/><text x="10" y="14" text-anchor="middle" fill="white" font-size="10" font-weight="bold">S</text></svg>`
+          };
+
+          const markerObj = new (window as any).AMap.Marker({
             position: [convertedPos.lng, convertedPos.lat],
             icon: new (window as any).AMap.Icon({
               size: new (window as any).AMap.Size(20, 20),
-              image: marker.type === 'tunnel' ?
-                'data:image/svg+xml;base64,' + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#8B4513" stroke="#654321" stroke-width="2"/><text x="10" y="14" text-anchor="middle" fill="white" font-size="10" font-weight="bold">T</text></svg>`) :
-                marker.type === 'drift' ?
-                'data:image/svg+xml;base64,' + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#FF6B35" stroke="#E55A2B" stroke-width="2"/><text x="10" y="14" text-anchor="middle" fill="white" font-size="10" font-weight="bold">D</text></svg>`) :
-                'data:image/svg+xml;base64,' + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#2196F3" stroke="#1976D2" stroke-width="2"/><text x="10" y="14" text-anchor="middle" fill="white" font-size="10" font-weight="bold">S</text></svg>`)
+              image: 'data:image/svg+xml;base64,' + btoa(markerIcon[marker.type])
             }),
-            title: marker.info
+            title: marker.info,
+            offset: new (window as any).AMap.Pixel(-10, -10),
+            zIndex: 110,
+            extData: { type: marker.type }
           });
+
+          // 添加点击事件
+          markerObj.on('click', () => {
+            const info = new (window as any).AMap.InfoWindow({
+              content: `<div style="padding:10px;">${marker.info}</div>`,
+              offset: new (window as any).AMap.Pixel(0, -30)
+            });
+            info.open(map.value, markerObj.getPosition());
+          });
+
+          return markerObj;
         });
 
         markers.value.push(...simulationMarkers);

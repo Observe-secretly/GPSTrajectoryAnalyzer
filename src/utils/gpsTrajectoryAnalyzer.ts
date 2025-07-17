@@ -124,9 +124,11 @@ export class GpsTrajectoryAnalyzer implements IGPSAlgorithm {
     const isDrift = this.isDriftPoint(internalPoint);
     
     if (isDrift) {
+      this.consecutiveDriftCount++;
       this.handleDriftPoint(internalPoint);
       return false;
     } else {
+      this.consecutiveDriftCount = 0;
       this.handleValidPoint(internalPoint);
       return true;
     }
@@ -480,17 +482,110 @@ export class GpsTrajectoryAnalyzer implements IGPSAlgorithm {
         info: `基准点重建 (${this.basePointRebuilds}次)`,
         timestamp: this.basePoint.createdAt
       });
-    }
     
-    // 漂移点标记（示例）
-    if (this.driftCount > 0) {
-      const midPoint = originalPoints[Math.floor(originalPoints.length / 2)];
-      markers.push({
-        type: 'drift',
-        position: { lat: midPoint.lat, lng: midPoint.lng },
-        info: `检测到${this.driftCount}个漂移点`,
-        timestamp: midPoint.timestamp
-      });
+    // 漂移点标记
+    const driftPoints = originalPoints.map((point, index) => {
+      const isDrift = this.slidingWindow.find(wp => 
+        wp.point.lat === point.lat && 
+        wp.point.lng === point.lng && 
+        wp.point.timestamp === point.timestamp
+      )?.isDrift || false;
+      return { point, isDrift, index };
+    });
+
+    // 为每个漂移点添加标记，并计算漂移距离
+    driftPoints.forEach(({ point, isDrift, index }, arrayIndex) => {
+      if (isDrift && this.basePoint) {
+        const distance = this.calculateDistance(
+          { lat: point.lat, lng: point.lng, timestamp: point.timestamp },
+          this.basePoint.point
+        );
+        const threshold = this.basePoint.radius * this.config.driftThresholdMultiplier;
+        markers.push({
+          type: 'drift',
+          position: { lat: point.lat, lng: point.lng },
+          info: `漂移点 (偏离${Math.round(distance)}米，阈值${Math.round(threshold)}米)`,
+          timestamp: point.timestamp
+        });
+      }
+    });
+    }
+
+    // 检测隧道和高速场景
+    let inTunnel = false;
+    let inHighSpeed = false;
+    let lastPoint: InternalGPSPoint | null = null;
+    let localConsecutiveDriftCount = 0;
+
+    for (let i = 0; i < originalPoints.length; i++) {
+      const currentPoint: InternalGPSPoint = {
+        lat: originalPoints[i].lat,
+        lng: originalPoints[i].lng,
+        timestamp: originalPoints[i].timestamp
+      };
+      
+      // 检查当前点是否为漂移点
+      const isDrift = this.slidingWindow.find(wp => 
+        wp.point.lat === currentPoint.lat && 
+        wp.point.lng === currentPoint.lng && 
+        wp.point.timestamp === currentPoint.timestamp
+      )?.isDrift || false;
+
+      // 更新连续漂移点计数
+      if (isDrift) {
+        localConsecutiveDriftCount++;
+      } else {
+        localConsecutiveDriftCount = 0;
+      }
+      
+      // 隧道检测（通过连续的漂移点）
+      if (localConsecutiveDriftCount >= 3) {
+        if (!inTunnel) {
+          markers.push({
+            type: 'tunnel',
+            position: { lat: currentPoint.lat, lng: currentPoint.lng },
+            info: `隧道区域 (${localConsecutiveDriftCount}个连续漂移点)`,
+            timestamp: currentPoint.timestamp
+          });
+          inTunnel = true;
+        }
+      } else {
+        inTunnel = false;
+      }
+
+      // 高速场景检测（通过连续点的距离和角度）
+      if (lastPoint) {
+        const distance = this.calculateDistance(lastPoint, currentPoint);
+        const timeDiff = (currentPoint.timestamp - lastPoint.timestamp) / 1000; // 转换为秒
+        const speed = distance / timeDiff; // 米/秒
+        const isHighSpeed = speed > 25; // 假设25米/秒(约90公里/小时)为高速阈值
+
+        // 检查是否为直线运动
+        let isLinearMotion = false;
+        if (i >= 2) {
+          const prevPoint = {
+            lat: originalPoints[i-2].lat,
+            lng: originalPoints[i-2].lng,
+            timestamp: originalPoints[i-2].timestamp
+          };
+          const angle = this.calculateMinAngleInTriangle(prevPoint, lastPoint, currentPoint);
+          isLinearMotion = angle > 150; // 接近直线的运动
+        }
+        
+        if (isHighSpeed && isLinearMotion && !inHighSpeed) {
+          markers.push({
+            type: 'speed',
+            position: { lat: currentPoint.lat, lng: currentPoint.lng },
+            info: `高速区域 (${Math.round(speed * 3.6)}km/h，直线运动)`,
+            timestamp: currentPoint.timestamp
+          });
+          inHighSpeed = true;
+        } else if (!isHighSpeed || !isLinearMotion) {
+          inHighSpeed = false;
+        }
+      }
+
+      lastPoint = currentPoint;
     }
   }
   

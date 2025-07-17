@@ -5,27 +5,33 @@ import { GPSProcessor, ProcessorConfig } from '../utils/gpsProcessor'
 import { GPSDataConverter } from '../utils/gpsDataConverter'
 
 // 类型定义
-interface Point {
+interface GPSPoint {
   lat: number
   lng: number
-  timestamp?: number
+  timestamp: number
 }
 
-interface Marker {
-  type: 'tunnel' | 'drift' | 'speed' | 'rebuild'
-  position: Point
+interface SimulationMarker {
+  type: 'tunnel' | 'drift' | 'speed'
+  position: GPSPoint
+  info: string
+}
+
+interface RebuildMarker {
+  type: 'rebuild'
+  position: GPSPoint
   info: string
 }
 
 interface ProcessedResult {
-  originalPoints: Point[]
-  processedPoints: Point[]
-  filteredPoints: Point[]
+  originalPoints: GPSPoint[]
+  processedPoints: GPSPoint[]
+  filteredPoints: GPSPoint[]
 }
 
 interface AlgorithmResult {
-  processedPoints: Point[]
-  markers: Marker[]
+  processedPoints: GPSPoint[]
+  markers: SimulationMarker[]
 }
 
 interface ProcessorStatus {
@@ -35,10 +41,11 @@ interface ProcessorStatus {
   basePointRadius: number
   consecutiveDriftCount: number
   basePointAge: number
-  basePoint?: Point
+  isBasePointExpired: boolean
+  basePoint: { lat: number; lng: number } | null
   discardedDriftPointsCount: number
   basePointRebuildsCount: number
-  basePointRebuildPositions?: Point[]
+  basePointRebuildPositions: GPSPoint[]
 }
 
 // 响应式状态
@@ -61,6 +68,13 @@ const showDriftMarkers = ref(true)
 const showSpeedMarkers = ref(true)
 const showRebuildMarkers = ref(true)
 
+// 模拟数据相关
+const isSimulationMode = ref(false)
+const simulationInfo = ref('')
+const simulationMarkers = ref<SimulationMarker[]>([])
+const basePointRebuildMarkers = ref<RebuildMarker[]>([])
+const baselineTrajectory = ref<GPSPoint[]>([])
+
 // 参数配置
 const processorConfig = reactive<ProcessorConfig>({
   windowSize: 10,
@@ -73,13 +87,6 @@ const processorConfig = reactive<ProcessorConfig>({
 // 运行时状态
 const processorStatus = ref<ProcessorStatus | null>(null)
 
-// 模拟数据相关
-const isSimulationMode = ref(false)
-const simulationInfo = ref('')
-const simulationMarkers = ref<Marker[]>([])
-const basePointRebuildMarkers = ref<Marker[]>([])
-const baselineTrajectory = ref<Point[]>([])
-
 // 计算过滤率
 const filterRate = computed(() => {
   if (processedResult.value) {
@@ -91,7 +98,7 @@ const filterRate = computed(() => {
 })
 
 // 获取当前处理结果的统一接口
-const currentProcessedPoints = computed<Point[]>(() => {
+const currentProcessedPoints = computed<GPSPoint[]>(() => {
   if (useNewAlgorithm.value && algorithmResult.value) {
     return algorithmResult.value.processedPoints
   } else if (processedResult.value) {
@@ -100,7 +107,7 @@ const currentProcessedPoints = computed<Point[]>(() => {
   return []
 })
 
-const currentOriginalPoints = computed<Point[]>(() => {
+const currentOriginalPoints = computed<GPSPoint[]>(() => {
   if (useNewAlgorithm.value && algorithmResult.value) {
     // 从算法包结果中获取原始点（需要从统计信息推断）
     return processedResult.value?.originalPoints || []
@@ -111,11 +118,15 @@ const currentOriginalPoints = computed<Point[]>(() => {
 })
 
 // 获取当前标记信息
-const currentMarkers = computed<Marker[]>(() => {
+const currentMarkers = computed<SimulationMarker[]>(() => {
   if (useNewAlgorithm.value && algorithmResult.value && algorithmResult.value.markers) {
     return algorithmResult.value.markers.map(marker => ({
       type: marker.type,
-      position: { lat: marker.position.lat, lng: marker.position.lng },
+      position: {
+        lat: marker.position.lat,
+        lng: marker.position.lng,
+        timestamp: Date.now() // 确保每个标记点位置都有时间戳
+      },
       info: marker.info
     }))
   }
@@ -123,7 +134,7 @@ const currentMarkers = computed<Marker[]>(() => {
 })
 
 // 过滤后的标记（使用统一接口）
-const filteredSimulationMarkers = computed<Marker[]>(() => {
+const filteredSimulationMarkers = computed<SimulationMarker[]>(() => {
   return currentMarkers.value.filter(marker => {
     if (marker.type === 'tunnel') return showTunnelMarkers.value
     if (marker.type === 'drift') return showDriftMarkers.value
@@ -132,7 +143,7 @@ const filteredSimulationMarkers = computed<Marker[]>(() => {
   })
 })
 
-const filteredRebuildMarkers = computed<Marker[]>(() => {
+const filteredRebuildMarkers = computed<RebuildMarker[]>(() => {
   return showRebuildMarkers.value ? basePointRebuildMarkers.value : []
 })
 
@@ -156,14 +167,11 @@ const processGPS = () => {
   if (!gpsInput.value.trim()) return
 
   try {
-    // 清空模拟模式标识
-    isSimulationMode.value = false
-    simulationInfo.value = ''
-    simulationMarkers.value = []
-    basePointRebuildMarkers.value = []
-    
-    // 解析GPS数据
-    const points = dataConverter.parseFromString(gpsInput.value)
+    // 解析GPS数据并添加时间戳
+    const points = dataConverter.parseFromString(gpsInput.value).map((point, index) => ({
+      ...point,
+      timestamp: Date.now() + index * 1000 // 确保每个点都有时间戳
+    })) as GPSPoint[]
     if (points.length === 0) {
       alert('未能解析到有效的GPS坐标，请检查输入格式')
       return
@@ -178,7 +186,7 @@ const processGPS = () => {
 
     // 创建基准点重建标记
     const status = gpsProcessor.getStatus()
-    basePointRebuildMarkers.value = status.basePointRebuildPositions?.map((point, index) => ({
+    basePointRebuildMarkers.value = status.basePointRebuildPositions.map((point, index) => ({
       type: 'rebuild' as const,
       position: { lat: point.lat, lng: point.lng },
       info: `基准点重建 #${index + 1}`
@@ -240,7 +248,11 @@ const generateSimulatedData = async () => {
     // 设置标记点
     simulationMarkers.value = simulatedResult.markers.map((marker: any) => ({
       type: marker.type as 'tunnel' | 'drift' | 'speed',
-      position: marker.position,
+      position: {
+        lat: marker.position.lat,
+        lng: marker.position.lng,
+        timestamp: Date.now() // 添加必需的timestamp
+      },
       info: marker.info
     }))
 
@@ -258,10 +270,10 @@ const generateSimulatedData = async () => {
 
     // 创建原始轨迹的processedResult以便在地图上显示
     processedResult.value = {
-      originalPoints: simulatedResult.points.map(p => ({
+      originalPoints: simulatedResult.points.map((p: any) => ({
         lat: p.lat,
         lng: p.lng,
-        timestamp: p.timestamp
+        timestamp: p.timestamp || Date.now() // 确保有timestamp
       })),
       processedPoints: [], // 空数组，因为还没有处理
       filteredPoints: [] // 空数组，因为还没有处理
@@ -290,7 +302,7 @@ const loadBaselineTrajectory = async () => {
       lat: point.lat,
       lng: point.lon,
       timestamp: Date.now() + index * 1000 // 模拟时间戳
-    }))
+    })) as GPSPoint[]
     console.log('基准轨迹加载完成，共', baselineTrajectory.value.length, '个点')
   } catch (error) {
     console.error('加载基准轨迹失败:', error)
