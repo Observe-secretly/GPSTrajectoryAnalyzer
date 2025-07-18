@@ -51,7 +51,7 @@
 <script lang="ts">
 import { ref, onMounted, onUnmounted, watch, defineComponent, computed, type PropType } from 'vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
-import type { GPSPoint } from '../utils/gpsProcessor'
+import type { GPSPoint } from '../utils/gpsCore'
 import { convertGpsPointsToGcj02 } from '../utils/coordinateConverter'
 
 export default defineComponent({
@@ -165,22 +165,68 @@ export default defineComponent({
     // 更新地图数据
     // 使用自定义坐标转换函数
     const convertCoordinates = (points: GPSPoint[]): GPSPoint[] => {
-      if (!points.length) return points;
+      if (!points || !Array.isArray(points)) {
+        console.warn('无效的坐标点数组');
+        return [];
+      }
+
+      if (!points.length) {
+        console.warn('空的坐标点数组');
+        return [];
+      }
+
+      // 过滤无效点
+      const validPoints = points.filter(point => {
+        if (!point || typeof point !== 'object') {
+          console.warn('无效的坐标点对象:', point);
+          return false;
+        }
+        if (typeof point.lat !== 'number' || typeof point.lng !== 'number') {
+          console.warn('坐标点缺少有效的经纬度:', point);
+          return false;
+        }
+        if (isNaN(point.lat) || isNaN(point.lng)) {
+          console.warn('坐标点经纬度为NaN:', point);
+          return false;
+        }
+        return true;
+      });
+
+      if (validPoints.length === 0) {
+        console.warn('没有有效的坐标点可以转换');
+        return [];
+      }
 
       // 根据开关决定是否进行坐标转换
       if (!props.enableCoordinateConversion) {
-        console.log(`坐标转换已关闭，直接使用原始坐标 ${points.length} 个点`);
-        return points;
+        console.log(`坐标转换已关闭，直接使用原始坐标 ${validPoints.length} 个点`);
+        return validPoints;
       }
 
       try {
         // 使用自定义的WGS84到GCJ02转换算法
-        const converted = convertGpsPointsToGcj02(points);
-        console.log(`成功转换 ${points.length} 个GPS坐标点到GCJ02坐标系`);
-        return converted;
+        const converted = convertGpsPointsToGcj02(validPoints);
+        
+        // 验证转换结果
+        const validConverted = converted.filter(point => {
+          if (!point || typeof point.lat !== 'number' || typeof point.lng !== 'number' ||
+              isNaN(point.lat) || isNaN(point.lng)) {
+            console.warn('转换后的坐标点无效:', point);
+            return false;
+          }
+          return true;
+        });
+
+        if (validConverted.length === 0) {
+          console.warn('坐标转换后没有有效点');
+          return validPoints;
+        }
+
+        console.log(`成功转换 ${validConverted.length} 个GPS坐标点到GCJ02坐标系`);
+        return validConverted;
       } catch (error) {
-        console.warn('坐标转换失败，使用原始坐标:', error);
-        return points;
+        console.error('坐标转换失败，使用原始坐标:', error);
+        return validPoints;
       }
     };
 
@@ -196,7 +242,14 @@ export default defineComponent({
       // 添加基准轨迹
       if (props.baselinePoints && props.baselinePoints.length > 0) {
         const baselineCoords = convertCoordinates(props.baselinePoints);
-        const baselinePath = baselineCoords.map(point => [point.lng, point.lat]);
+        const baselinePath = baselineCoords
+          .filter(point => point && typeof point.lng === 'number' && typeof point.lat === 'number' && !isNaN(point.lng) && !isNaN(point.lat))
+          .map(point => [point.lng, point.lat]);
+        
+        if (baselinePath.length === 0) {
+          console.warn('基准轨迹坐标点无效');
+          return;
+        }
 
         const baselinePolyline = new (window as any).AMap.Polyline({
           path: baselinePath,
@@ -218,7 +271,9 @@ export default defineComponent({
       // 转换并创建原始轨迹
       if (props.originalPoints && props.originalPoints.length > 0) {
         const convertedOriginal = convertCoordinates(props.originalPoints);
-        const originalPath = convertedOriginal.map((point: GPSPoint) => [point.lng, point.lat]);
+        const originalPath = convertedOriginal
+          .filter((point: GPSPoint) => point && typeof point.lng === 'number' && typeof point.lat === 'number' && !isNaN(point.lng) && !isNaN(point.lat))
+          .map((point: GPSPoint) => [point.lng, point.lat]);
         const originalPolyline = new (window as any).AMap.Polyline({
           path: originalPath,
           strokeColor: '#FF5722',
@@ -238,7 +293,9 @@ export default defineComponent({
       // 类似地转换processedPoints
       if (props.processedPoints && props.processedPoints.length > 0) {
         const convertedProcessed = convertCoordinates(props.processedPoints);
-        const processedPath = convertedProcessed.map((point: GPSPoint) => [point.lng, point.lat]);
+        const processedPath = convertedProcessed
+          .filter((point: GPSPoint) => point && typeof point.lng === 'number' && typeof point.lat === 'number' && !isNaN(point.lng) && !isNaN(point.lat))
+          .map((point: GPSPoint) => [point.lng, point.lat]);
         const processedPolyline = new (window as any).AMap.Polyline({
           path: processedPath,
           strokeColor: '#4CAF50',
@@ -258,15 +315,30 @@ export default defineComponent({
 
 
       // 添加可见的轨迹线到地图
-      if (linesToAdd.length > 0) {
-        map.value.add(linesToAdd);
-        polylines.value = linesToAdd;
+      if (linesToAdd.length > 0 && allPaths.length > 0) {
+        try {
+          map.value.add(linesToAdd);
+          polylines.value = linesToAdd;
+          console.log('添加轨迹线成功，路径点数量:', allPaths.length);
+        } catch (error) {
+          console.error('添加轨迹线失败:', error);
+          console.log('轨迹线路径:', allPaths);
+        }
+      } else {
+        console.warn('没有有效的轨迹线可添加');
       }
 
       // 添加起点和终点标记
       const pointsForMarkers = props.processedPoints?.length > 0 ? props.processedPoints : props.originalPoints;
       if (pointsForMarkers && pointsForMarkers.length > 0) {
-        const convertedPointsForMarkers = convertCoordinates(pointsForMarkers);
+        const convertedPointsForMarkers = convertCoordinates(pointsForMarkers)
+          .filter(point => point && typeof point.lng === 'number' && typeof point.lat === 'number' && !isNaN(point.lng) && !isNaN(point.lat));
+
+        if (convertedPointsForMarkers.length === 0) {
+          console.warn('起点和终点标记坐标点无效');
+          return;
+        }
+
         const startPoint = convertedPointsForMarkers[0];
         const endPoint = convertedPointsForMarkers[convertedPointsForMarkers.length - 1];
 
@@ -296,11 +368,23 @@ export default defineComponent({
       if (props.simulationMarkers && props.simulationMarkers.length > 0) {
         console.log('添加标记点:', props.simulationMarkers);
         const simulationMarkers = props.simulationMarkers.map((marker: { type: 'tunnel' | 'drift' | 'speed', position: { lat: number, lng: number }, info: string }) => {
+          // 验证坐标有效性
+          if (!marker.position || typeof marker.position.lat !== 'number' || typeof marker.position.lng !== 'number' ||
+              isNaN(marker.position.lat) || isNaN(marker.position.lng)) {
+            console.warn('无效的标记点坐标:', marker);
+            return null;
+          }
+
           const convertedMarkers = convertCoordinates([{
             lat: marker.position.lat,
             lng: marker.position.lng,
             timestamp: Date.now()
           }]);
+
+          if (!convertedMarkers || !convertedMarkers[0]) {
+            console.warn('坐标转换失败:', marker);
+            return null;
+          }
 
           const convertedPos = convertedMarkers[0];
           console.log(`处理标记点 - 类型: ${marker.type}, 位置: [${convertedPos.lat}, ${convertedPos.lng}], 信息: ${marker.info}`);
@@ -335,18 +419,34 @@ export default defineComponent({
           return markerObj;
         });
 
-        markers.value.push(...simulationMarkers);
-        map.value.add(simulationMarkers);
+        // 过滤掉无效的标记点
+        const validSimulationMarkers = simulationMarkers.filter(marker => marker !== null);
+        if (validSimulationMarkers.length > 0) {
+          markers.value.push(...validSimulationMarkers);
+          map.value.add(validSimulationMarkers);
+        }
       }
 
       // 添加基准点重建标记
       if (props.basePointRebuildMarkers && props.basePointRebuildMarkers.length > 0) {
         const rebuildMarkers = props.basePointRebuildMarkers.map((marker: { type: 'rebuild', position: { lat: number, lng: number }, info: string }) => {
+          // 验证坐标有效性
+          if (!marker.position || typeof marker.position.lat !== 'number' || typeof marker.position.lng !== 'number' ||
+              isNaN(marker.position.lat) || isNaN(marker.position.lng)) {
+            console.warn('无效的重建点坐标:', marker);
+            return null;
+          }
+
           const convertedMarkers = convertCoordinates([{
             lat: marker.position.lat,
             lng: marker.position.lng,
             timestamp: Date.now()
           }]);
+
+          if (!convertedMarkers || !convertedMarkers[0]) {
+            console.warn('坐标转换失败:', marker);
+            return null;
+          }
 
           const convertedPos = convertedMarkers[0];
 
@@ -360,8 +460,12 @@ export default defineComponent({
           });
         });
 
-        markers.value.push(...rebuildMarkers);
-        map.value.add(rebuildMarkers);
+        // 过滤掉无效的重建点标记
+        const validRebuildMarkers = rebuildMarkers.filter(marker => marker !== null);
+        if (validRebuildMarkers.length > 0) {
+          markers.value.push(...validRebuildMarkers);
+          map.value.add(validRebuildMarkers);
+        }
       }
 
       // 自适应显示所有点

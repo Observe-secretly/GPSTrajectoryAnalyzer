@@ -11,6 +11,7 @@ export interface GPSPoint {
   lat: number;        // 纬度
   lng: number;        // 经度
   timestamp: number;  // 时间戳（毫秒）
+  isDeleted?: boolean; // 标记是否被删除（用于隧道场景）
 }
 
 /** 扩展GPS点数据结构（包含速度、高度、航向角） */

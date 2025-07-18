@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted } from 'vue'
 import AmapContainer from '../components/AmapContainer.vue'
-import { GPSProcessor, ProcessorConfig } from '../utils/gpsProcessor'
-import { GPSDataConverter } from '../utils/gpsDataConverter'
+import { GPSCore, ProcessorConfig, GPSPoint, ConvertedGPSPoint } from '../utils/gpsCore'
+import { GPSSimulationGenerator } from '../utils/gpsSimulationGenerator'
 
 // 类型定义
-interface GPSPoint {
+interface SimulatedResult {
+  points: GPSPoint[]
+  markers: Array<{
+    type: 'tunnel' | 'drift' | 'speed'
+    position: GPSPoint
+    info: string
+  }>
+}
+
+// 其他类型定义
+interface SimulationConfig {
   lat: number
   lng: number
   timestamp: number
@@ -51,8 +61,8 @@ interface ProcessorStatus {
 // 响应式状态
 const gpsInput = ref('')
 const processedResult = ref<ProcessedResult | null>(null)
-const gpsProcessor = new GPSProcessor()
-const dataConverter = new GPSDataConverter()
+const gpsCore = new GPSCore()
+const simulationGenerator = new GPSSimulationGenerator()
 const isPanelExpanded = ref(true)
 const showInputMode = ref(true) // true: 输入模式, false: 参数调整模式
 const enableCoordinateConversion = ref(true)
@@ -135,7 +145,7 @@ const currentOriginalPoints = computed<GPSPoint[]>(() => {
 // 获取当前标记信息
 const currentMarkers = computed<SimulationMarker[]>(() => {
   if (useNewAlgorithm.value && algorithmResult.value && algorithmResult.value.markers) {
-    return algorithmResult.value.markers.map(marker => ({
+    return algorithmResult.value.markers.map((marker): SimulationMarker => ({
       type: marker.type,
       position: {
         lat: marker.position.lat,
@@ -165,7 +175,7 @@ const filteredRebuildMarkers = computed<RebuildMarker[]>(() => {
 // 更新处理器配置
 const updateProcessorConfig = () => {
   // 更新处理器配置
-  gpsProcessor.updateConfig(processorConfig)
+  gpsCore.updateConfig(processorConfig)
   // 如果有处理结果，重新处理数据
   if (processedResult.value && gpsInput.value.trim()) {
     processGPS()
@@ -174,7 +184,7 @@ const updateProcessorConfig = () => {
 
 // 刷新状态
 const refreshStatus = () => {
-  processorStatus.value = gpsProcessor.getStatus()
+  processorStatus.value = gpsCore.getStatus()
 }
 
 // 处理GPS数据（添加防抖）
@@ -186,7 +196,7 @@ const processGPS = debounce(async () => {
 
   try {
     // 解析GPS数据并添加时间戳
-    const points = dataConverter.parseFromString(gpsInput.value).map((point, index) => ({
+    const points = gpsCore.parseFromString(gpsInput.value).map((point: GPSPoint, index) => ({
       ...point,
       timestamp: Date.now() + index * 1000 // 确保每个点都有时间戳
     })) as GPSPoint[]
@@ -196,14 +206,14 @@ const processGPS = debounce(async () => {
     }
     
     // 更新配置
-    gpsProcessor.updateConfig(processorConfig)
+    gpsCore.updateConfig(processorConfig)
     
     // 处理GPS轨迹
-    processedResult.value = gpsProcessor.processTrajectory(points)
+    processedResult.value = gpsCore.processTrajectory(points)
     refreshStatus()
 
     // 创建基准点重建标记
-    const status = gpsProcessor.getStatus()
+    const status = gpsCore.getStatus()
     basePointRebuildMarkers.value = status.basePointRebuildPositions.map((point, index) => ({
       type: 'rebuild' as const,
       position: {
@@ -246,7 +256,7 @@ const finishAdjustment = () => {
 
 // 生成模拟数据（添加防抖）
 const generateSimulatedData = debounce(async () => {
-  if (isLoading.value) return
+  if (!simulationGenerator || isLoading.value) return
   isLoading.value = true
   loadingMessage.value = '正在生成模拟数据...'
   try {
@@ -263,31 +273,67 @@ const generateSimulatedData = debounce(async () => {
     }
 
     // 转换数据格式
-    const convertedData = trajectoryData.map((point: any) => ({
-      alt: null,
-      cog: 0,
-      lat: point.lat,
-      lon: point.lon,
-      spd: 0
-    }))
+    const validPoints = trajectoryData
+      .map((point: { lat: number; lon: number; ts?: string }, index: number) => {
+        // 验证坐标有效性
+        if (typeof point.lat !== 'number' || typeof point.lon !== 'number' || isNaN(point.lat) || isNaN(point.lon)) {
+          console.warn(`跳过无效坐标点: lat=${point.lat}, lon=${point.lon}`);
+          return null;
+        }
+        
+        // 生成时间戳
+        const timestamp = point.ts ? new Date(point.ts).getTime() : Date.now() + index * 1000;
+        
+        return {
+          lat: point.lat,
+          lng: point.lon,
+          timestamp,
+          alt: null,
+          cog: 0,
+          spd: 0
+        } as ConvertedGPSPoint;
+      })
+      .filter((point): point is ConvertedGPSPoint => point !== null);
 
-    // 使用旧处理器生成模拟数据
-    console.log('使用处理器生成模拟数据')
-    const simulatedResult = GPSProcessor.generateSimulatedData(convertedData)
+    if (validPoints.length === 0) {
+      console.warn('没有有效的坐标点数据');
+      return;
+    }
+
+    // 使用模拟数据生成器
+    console.log('使用模拟数据生成器生成数据，有效点数：', validPoints.length);
+    const simulatedResult = simulationGenerator.generateSimulatedData(validPoints) as SimulatedResult;
+    
+    if (!simulatedResult.points || simulatedResult.points.length === 0) {
+      console.warn('模拟数据生成失败：没有生成任何点');
+      return;
+    }
+
+    console.log('成功生成模拟数据，点数：', simulatedResult.points.length);
     
     // 设置标记点
-    simulationMarkers.value = simulatedResult.markers.map((marker: any) => ({
+    simulationMarkers.value = simulatedResult.markers.map((marker): SimulationMarker => ({
       type: marker.type as 'tunnel' | 'drift' | 'speed',
       position: {
         lat: marker.position.lat,
         lng: marker.position.lng,
-        timestamp: Date.now() // 添加必需的timestamp
+        timestamp: Date.now() // 为每个标记点设置当前时间戳
       },
       info: marker.info
-    }))
+    }));
 
-    // 转换为GPS输入格式
-    const gpsText = simulatedResult.points.map(point => `${point.lat},${point.lng}`).join('\n')
+    // 转换为GPS输入格式，确保包含时间戳
+    const gpsText = simulatedResult.points
+      .filter(point => 
+        typeof point.lat === 'number' && 
+        typeof point.lng === 'number' && 
+        typeof point.timestamp === 'number' && 
+        !isNaN(point.lat) && 
+        !isNaN(point.lng) && 
+        !isNaN(point.timestamp)
+      )
+      .map(point => `${point.lat},${point.lng},${point.timestamp}`)
+      .join('\n');
     gpsInput.value = gpsText
 
     // 设置模拟模式标识
@@ -300,7 +346,7 @@ const generateSimulatedData = debounce(async () => {
 
     // 创建原始轨迹的processedResult以便在地图上显示
     processedResult.value = {
-      originalPoints: simulatedResult.points.map((p: any) => ({
+      originalPoints: simulatedResult.points.map((p: GPSPoint) => ({
         lat: p.lat,
         lng: p.lng,
         timestamp: p.timestamp || Date.now() // 确保有timestamp
@@ -335,7 +381,7 @@ const loadBaselineTrajectory = async () => {
   try {
     const response = await fetch('/convertedTrajectory.json')
     const data = await response.json()
-    baselineTrajectory.value = data.map((point: any, index: number) => ({
+    baselineTrajectory.value = data.map((point: { lat: number; lon: number }, index: number): GPSPoint => ({
       lat: point.lat,
       lng: point.lon,
       timestamp: Date.now() + index * 1000 // 模拟时间戳
@@ -574,13 +620,13 @@ onMounted(() => {
         <div class="stat-item">
           <span class="stat-label">忽略漂移点:</span>
           <span class="stat-value">
-            {{ gpsProcessor?.getStatus().discardedDriftPointsCount || 0 }}
+            {{ processorStatus?.discardedDriftPointsCount || 0 }}
           </span>
         </div>
         <div class="stat-item">
           <span class="stat-label">基准点重建:</span>
           <span class="stat-value">
-            {{ gpsProcessor?.getStatus().basePointRebuildsCount || 0 }}
+            {{ processorStatus?.basePointRebuildsCount || 0 }}
           </span>
         </div>
       </div>
